@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "jira-mcp-poc": {
+      "command": "node",
+      "args": ["/Users/dimon228/Desktop/poc-work-mcp-jira/dist/mcp-server.js"],
+      "env": {
+        "JIRA_CLOUD_ID": "98e8fc6d-f50f-44dc-a497-0f45939d8289",
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+        "GITHUB_REPO": "${GITLAB_REPO}",
+        "GITLAB_TOKEN": "${GITLAB_TOKEN}",
+        "GITLAB_REPO": "${GITLAB_REPO}",
+        "CURSOR_ENABLED": "true"
+      }
+    }
+  }
+}
