@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that integrates Jira with Cursor IDE, enab
 
 ## Features
 
-- 🔗 **Jira Integration**: Full integration with Atlassian Jira Cloud via MCP
+- 🔗 **Jira Integration**: Full integration with both Jira Cloud (via MCP) and Jira Data Center (on-premise via REST API)
 - 🌿 **Automatic Branch Creation**: Automatically creates GitHub or GitLab branches when creating Jira issues
 - 🔄 **Workflow Automation**: Assign issues, transition to review status, and trigger Cursor analysis
 - 🌐 **Multi-language Support**: Transliterates non-English characters in branch names to English
@@ -42,8 +42,15 @@ npm run build
 
 Create a `.env` file in the project root with the following variables:
 
-#### Required
+#### Required (choose one)
+
+**For Jira Cloud:**
 - `JIRA_CLOUD_ID` or `CLOUD_ID` - Your Jira Cloud ID (UUID format)
+
+**For Jira Data Center (on-premise):**
+- `JIRA_BASE_URL` - Your Jira instance URL (e.g., `https://jira.service.snpgroup.com`)
+- `JIRA_API_TOKEN` or `JIRA_PERSONAL_ACCESS_TOKEN` - Personal Access Token for authentication
+- `JIRA_USERNAME` or `JIRA_EMAIL` - Your Jira username or email (required for Basic Auth)
 
 #### Optional - GitHub Integration
 - `GITHUB_TOKEN` - GitHub personal access token with `repo` scope
@@ -57,8 +64,20 @@ Create a `.env` file in the project root with the following variables:
 
 
 ### Example `.env` file:
+
+**For Jira Cloud:**
 ```env
 JIRA_CLOUD_ID=98e8fc6d-f50f-44dc-a497-0f45939d8289
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+GITHUB_REPO=owner/repository-name
+GITHUB_DEFAULT_BRANCH=main
+```
+
+**For Jira Data Center:**
+```env
+JIRA_BASE_URL=https://jira.service.snpgroup.com
+JIRA_API_TOKEN=your-personal-access-token
+JIRA_USERNAME=your-email@example.com
 GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 GITHUB_REPO=owner/repository-name
 GITHUB_DEFAULT_BRANCH=main
@@ -219,14 +238,42 @@ npm run mcp-server
 npm start
 ```
 
+## Jira Data Center Setup
+
+For Jira Data Center (on-premise), you need to:
+
+1. **Create a Personal Access Token:**
+   - Go to your Jira instance
+   - Navigate to Account Settings → Security → API Tokens (or Personal Access Tokens)
+   - Create a new token
+   - Copy the token
+
+2. **Configure environment variables:**
+   ```env
+   JIRA_BASE_URL=https://your-jira-instance.com
+   JIRA_API_TOKEN=your-personal-access-token
+   JIRA_USERNAME=your-email@example.com
+   ```
+
+3. **Note:** The system automatically detects whether you're using Cloud or Data Center:
+   - If `JIRA_BASE_URL` is set → Data Center mode
+   - If `JIRA_CLOUD_ID` is set → Cloud mode
+
 ## Troubleshooting
 
 ### MCP Connection Issues
 
+**For Jira Cloud:**
 1. Verify your `JIRA_CLOUD_ID` is set correctly
 2. Check that the MCP server path in Cursor config is absolute
 3. Ensure Node.js is in your PATH
 4. Check Cursor logs for connection errors
+
+**For Jira Data Center:**
+1. Verify your `JIRA_BASE_URL` is correct (should be the base URL without `/rest/api`)
+2. Check that `JIRA_API_TOKEN` and `JIRA_USERNAME` are set correctly
+3. Ensure your Personal Access Token has the necessary permissions
+4. Test the connection by accessing `https://your-jira-instance.com/rest/api/2/serverInfo` with your credentials
 
 ### Branch Creation Fails
 

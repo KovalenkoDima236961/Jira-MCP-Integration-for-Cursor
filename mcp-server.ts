@@ -18,6 +18,7 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { URL } from "node:url";
 
 const execAsync = promisify(exec);
 
@@ -27,6 +28,15 @@ const REMOTE_MCP = "https://mcp.atlassian.com/v1/mcp";
 
 let jiraClient: Client | null = null;
 let jiraTransport: StdioClientTransport | null = null;
+
+// Determine Jira type: "cloud" or "datacenter"
+function getJiraType(): "cloud" | "datacenter" {
+  const baseUrl = process.env.JIRA_BASE_URL;
+  if (baseUrl && baseUrl.trim()) {
+    return "datacenter";
+  }
+  return "cloud";
+}
 
 async function getJiraClient(): Promise<Client> {
   if (!jiraClient) {
@@ -41,12 +51,163 @@ async function getJiraClient(): Promise<Client> {
 }
 
 async function callJiraTool(name: string, args: JsonObject): Promise<unknown> {
+  const jiraType = getJiraType();
+  
+  if (jiraType === "datacenter") {
+    // Map MCP tool names to Data Center REST API endpoints
+    return await callJiraDataCenterTool(name, args);
+  }
+  
+  // Use Cloud MCP
   const client = await getJiraClient();
   const result = await client.request(
     { method: "tools/call", params: { name, arguments: args } },
     CallToolResultSchema
   );
   return result;
+}
+
+async function callJiraDataCenterTool(name: string, args: JsonObject): Promise<unknown> {
+  // Map MCP tool names to Data Center REST API
+  switch (name) {
+    case "getJiraIssue": {
+      const result = await callJiraDataCenterAPI(`issue/${args.issueIdOrKey}`);
+      // Return in MCP format
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "createJiraIssue": {
+      const fields: JsonObject = {
+        project: { key: args.projectKey },
+        summary: args.summary,
+        issuetype: { name: args.issueTypeName },
+      };
+      
+      if (args.description) {
+        fields.description = args.description;
+      }
+      
+      // Merge additional fields
+      if (args.fields && typeof args.fields === "object") {
+        Object.assign(fields, args.fields);
+      }
+      
+      const result = await callJiraDataCenterAPI("issue", "POST", { fields });
+      // Return in MCP format with issue key
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "editJiraIssue": {
+      const result = await callJiraDataCenterAPI(`issue/${args.issueIdOrKey}`, "PUT", {
+        fields: args.fields as JsonObject || {},
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "getTransitionsForJiraIssue": {
+      const result = await callJiraDataCenterAPI(`issue/${args.issueIdOrKey}/transitions`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "transitionJiraIssue": {
+      const transitionData: JsonObject = {
+        transition: args.transition,
+      };
+      if (args.fields) {
+        transitionData.fields = args.fields;
+      }
+      const result = await callJiraDataCenterAPI(`issue/${args.issueIdOrKey}/transitions`, "POST", transitionData);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "getVisibleJiraProjects": {
+      const result = await callJiraDataCenterAPI("project");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "getJiraProjectIssueTypesMetadata": {
+      const result = await callJiraDataCenterAPI(`project/${args.projectIdOrKey}/statuses`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "getJiraIssueTypeMetaWithFields": {
+      const result = await callJiraDataCenterAPI(`issue/createmeta?projectKeys=${args.projectIdOrKey}&issuetypeNames=${args.issueTypeId}`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case "addCommentToJiraIssue": {
+      const result = await callJiraDataCenterAPI(`issue/${args.issueIdOrKey}/comment`, "POST", {
+        body: args.commentBody,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+    
+    default:
+      throw new Error(`Tool ${name} not yet implemented for Data Center. Please use Jira Cloud or implement this tool.`);
+  }
 }
 
 function sanitizeBranchName(name: string): string {
@@ -75,6 +236,54 @@ function httpsRequest(options: https.RequestOptions, data?: string): Promise<str
     if (data) req.write(data);
     req.end();
   });
+}
+
+// Jira Data Center REST API functions
+async function callJiraDataCenterAPI(endpoint: string, method: string = "GET", body?: JsonObject): Promise<unknown> {
+  const baseUrl = process.env.JIRA_BASE_URL;
+  const token = process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN;
+  const username = process.env.JIRA_USERNAME || process.env.JIRA_EMAIL;
+  
+  if (!baseUrl) {
+    throw new Error("JIRA_BASE_URL is required for Data Center");
+  }
+  if (!token) {
+    throw new Error("JIRA_API_TOKEN or JIRA_PERSONAL_ACCESS_TOKEN is required for Data Center");
+  }
+
+  const url = new URL(baseUrl);
+  const apiPath = endpoint.startsWith("/rest/api") ? endpoint : `/rest/api/2/${endpoint}`;
+  const fullPath = url.pathname.endsWith("/") 
+    ? `${url.pathname.slice(0, -1)}${apiPath}` 
+    : `${url.pathname}${apiPath}`;
+
+  // For Personal Access Token, use Basic Auth with email:token
+  // For API Token, use Basic Auth with username:token
+  let authHeader: string;
+  if (username) {
+    // Basic Auth: username:token
+    const credentials = Buffer.from(`${username}:${token}`).toString("base64");
+    authHeader = `Basic ${credentials}`;
+  } else {
+    // Try Bearer token (some Data Center versions support this)
+    authHeader = `Bearer ${token}`;
+  }
+
+  const options: https.RequestOptions = {
+    hostname: url.hostname,
+    port: url.port || (url.protocol === "https:" ? 443 : 80),
+    path: fullPath,
+    method: method,
+    headers: {
+      "Authorization": authHeader,
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    },
+  };
+
+  const data = body ? JSON.stringify(body) : undefined;
+  const response = await httpsRequest(options, data);
+  return JSON.parse(response);
 }
 
 async function getDefaultBranchSha(repo: string, branch: string, token: string): Promise<string> {
@@ -282,6 +491,8 @@ async function handleCreateResponse(res: unknown, branchNameInput?: string): Pro
         if (item.type === "text" && item.text) {
           try {
             const parsed = JSON.parse(item.text);
+            // For Data Center, issue key is in parsed.key
+            // For Cloud, it might be in different places
             issueKey = parsed?.key || parsed?.fields?.key || parsed?.id || null;
             if (issueKey) break;
           } catch {
@@ -295,7 +506,7 @@ async function handleCreateResponse(res: unknown, branchNameInput?: string): Pro
         }
       }
     } else {
-      // Direct field access
+      // Direct field access (for Data Center direct API responses)
       issueKey = responseObj?.key || 
                  responseObj?.fields?.key || 
                  responseObj?.id ||
@@ -325,11 +536,23 @@ async function handleCreateResponse(res: unknown, branchNameInput?: string): Pro
 }
 
 function getCloudId(): string {
+  const jiraType = getJiraType();
+  
+  if (jiraType === "datacenter") {
+    // For Data Center, we don't use cloudId, return base URL instead
+    const baseUrl = process.env.JIRA_BASE_URL;
+    if (!baseUrl) {
+      throw new Error("JIRA_BASE_URL is required for Data Center");
+    }
+    return baseUrl;
+  }
+  
+  // For Cloud
   const envCloudId = process.env.JIRA_CLOUD_ID || process.env.CLOUD_ID;
   if (envCloudId) {
     return envCloudId.replace(/^["']|["']$/g, '').trim();
   }
-  throw new Error("JIRA_CLOUD_ID not set. Please set it in environment variables.");
+  throw new Error("JIRA_CLOUD_ID not set. Please set it in environment variables for Jira Cloud, or set JIRA_BASE_URL for Data Center.");
 }
 
 // Create MCP server for Cursor
@@ -348,8 +571,81 @@ const server = new Server(
 // Handle list tools - add custom tools + proxy from Atlassian MCP
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   try {
-    const client = await getJiraClient();
-    const jiraTools = await client.request({ method: "tools/list" }, ListToolsResultSchema);
+    const jiraType = getJiraType();
+    let jiraTools: { tools: Tool[] } = { tools: [] };
+    
+    if (jiraType === "cloud") {
+      const client = await getJiraClient();
+      jiraTools = await client.request({ method: "tools/list" }, ListToolsResultSchema);
+    } else {
+      // For Data Center, provide basic tools that we support
+      jiraTools = {
+        tools: [
+          {
+            name: "getJiraIssue",
+            description: "Get a Jira issue by issue id or key",
+            inputSchema: {
+              type: "object",
+              properties: {
+                issueIdOrKey: { type: "string" },
+              },
+              required: ["issueIdOrKey"],
+            },
+          },
+          {
+            name: "createJiraIssue",
+            description: "Create a Jira issue",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectKey: { type: "string" },
+                issueTypeName: { type: "string" },
+                summary: { type: "string" },
+                description: { type: "string" },
+                fields: { type: "object" },
+              },
+              required: ["projectKey", "issueTypeName", "summary"],
+            },
+          },
+          {
+            name: "editJiraIssue",
+            description: "Edit a Jira issue",
+            inputSchema: {
+              type: "object",
+              properties: {
+                issueIdOrKey: { type: "string" },
+                fields: { type: "object" },
+              },
+              required: ["issueIdOrKey", "fields"],
+            },
+          },
+          {
+            name: "getTransitionsForJiraIssue",
+            description: "Get available transitions for a Jira issue",
+            inputSchema: {
+              type: "object",
+              properties: {
+                issueIdOrKey: { type: "string" },
+              },
+              required: ["issueIdOrKey"],
+            },
+          },
+          {
+            name: "transitionJiraIssue",
+            description: "Transition a Jira issue",
+            inputSchema: {
+              type: "object",
+              properties: {
+                issueIdOrKey: { type: "string" },
+                transition: { type: "object" },
+                fields: { type: "object" },
+              },
+              required: ["issueIdOrKey", "transition"],
+            },
+          },
+        ],
+      };
+    }
     
     // Add custom tools with additional logic
     const customTools: Tool[] = [
@@ -359,7 +655,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            cloudId: { type: "string", description: "Jira Cloud ID" },
+            cloudId: { type: "string", description: "Jira Cloud ID (for Cloud) or JIRA_BASE_URL (for Data Center)" },
             projectKey: { type: "string", description: "Project key (e.g., OPS)" },
             issueTypeName: { type: "string", description: "Issue type (Task, Bug, Story, etc.)" },
             summary: { type: "string", description: "Issue summary/title" },
@@ -376,7 +672,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            cloudId: { type: "string", description: "Jira Cloud ID" },
+            cloudId: { type: "string", description: "Jira Cloud ID (for Cloud) or JIRA_BASE_URL (for Data Center)" },
             issueIdOrKey: { type: "string", description: "Issue key (e.g., OPS-123)" },
             assignee: { type: "string", description: "Assignee email, accountId, or 'unassign' to remove" },
           },
@@ -389,7 +685,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            cloudId: { type: "string", description: "Jira Cloud ID" },
+            cloudId: { type: "string", description: "Jira Cloud ID (for Cloud) or JIRA_BASE_URL (for Data Center)" },
             issueIdOrKey: { type: "string", description: "Issue key (e.g., OPS-123)" },
           },
           required: ["cloudId", "issueIdOrKey"],
@@ -401,7 +697,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            cloudId: { type: "string", description: "Jira Cloud ID" },
+            cloudId: { type: "string", description: "Jira Cloud ID (for Cloud) or JIRA_BASE_URL (for Data Center)" },
             issueIdOrKey: { type: "string", description: "Issue key (e.g., OPS-123)" },
             branchName: { type: "string", description: "Custom branch name (optional, defaults to issue key)" },
           },
