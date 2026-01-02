@@ -50,14 +50,11 @@ Create a `.env` file in the project root with the following variables:
 - `GITHUB_REPO` - Repository in format `owner/repo` or full URL
 - `GITHUB_DEFAULT_BRANCH` - Default branch name (default: `main`)
 
-#### Optional - GitLab Integration
-- `GITLAB_TOKEN` - GitLab personal access token with `api` scope
-- `GITLAB_REPO` - Repository path or project ID
-- `GITLAB_URL` - GitLab instance URL (default: `https://gitlab.com`)
-- `GITLAB_DEFAULT_BRANCH` - Default branch name (default: `main`)
+#### Optional - Local Git Integration (GitLab/GitHub)
+- `GITLAB_DEFAULT_BRANCH` or `GITHUB_DEFAULT_BRANCH` - Default branch name (default: `master`)
 
-#### Optional - Cursor Integration
-- `CURSOR_ENABLED` - Enable Cursor analysis integration (`true` or `1`)
+**Note:** For local git operations, you don't need GitLab/GitHub tokens. The system automatically uses the current working directory where the command is executed. If you're running the command from Cursor in a project folder, it will automatically use that directory and detect if it's a git repository.
+
 
 ### Example `.env` file:
 ```env
@@ -65,7 +62,6 @@ JIRA_CLOUD_ID=98e8fc6d-f50f-44dc-a497-0f45939d8289
 GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 GITHUB_REPO=owner/repository-name
 GITHUB_DEFAULT_BRANCH=main
-CURSOR_ENABLED=true
 ```
 
 ## Usage
@@ -83,10 +79,7 @@ CURSOR_ENABLED=true
       "env": {
         "JIRA_CLOUD_ID": "your-cloud-id",
         "GITHUB_TOKEN": "${GITHUB_TOKEN}",
-        "GITHUB_REPO": "${GITHUB_REPO}",
-        "GITLAB_TOKEN": "${GITLAB_TOKEN}",
-        "GITLAB_REPO": "${GITLAB_REPO}",
-        "CURSOR_ENABLED": "true"
+        "GITHUB_REPO": "${GITHUB_REPO}"
       }
     }
   }
@@ -139,8 +132,7 @@ Creates a Jira issue and automatically creates a GitHub/GitLab branch.
   "projectKey": "OPS",
   "issueTypeName": "Task",
   "summary": "Fix login bug",
-  "description": "The login form is not working properly",
-  "mode": "dev"
+  "description": "The login form is not working properly"
 }
 ```
 
@@ -161,14 +153,22 @@ Transitions a Jira issue to "In Review" status.
 - `cloudId` (string, required) - Jira Cloud ID
 - `issueIdOrKey` (string, required) - Issue key (e.g., "OPS-123")
 
-## Branch Name Transliteration
+### `analyzeJiraIssue`
 
-The server automatically transliterates non-English characters in branch names to English:
+Analyzes a Jira issue. Automatically creates a branch if it doesn't exist, then prepares the issue for analysis.
 
-- Ukrainian: "Створити файл" → "stvoryty-fail"
-- Russian: "Тестирование" → "testirovanie"
-- Special characters are replaced with hyphens
-- Maximum length: 100 characters
+**Parameters:**
+- `cloudId` (string, required) - Jira Cloud ID
+- `issueIdOrKey` (string, required) - Issue key (e.g., "OPS-123")
+- `branchName` (string, optional) - Custom branch name (optional, defaults to issue key)
+
+**Example:**
+```json
+{
+  "cloudId": "98e8fc6d-f50f-44dc-a497-0f45939d8289",
+  "issueIdOrKey": "OPS-123"
+}
+```
 
 ## GitHub Token Permissions
 
@@ -176,10 +176,18 @@ For GitHub integration, your personal access token needs:
 - **Classic tokens**: `repo` scope (full control of private repositories)
 - **Fine-grained tokens**: "Read and write" permission for "Contents"
 
-## GitLab Token Permissions
+## Local Git Integration
 
-For GitLab integration, your personal access token needs:
-- `api` scope
+For local git operations (creating branches locally):
+- No token required
+- The system automatically uses the current working directory
+- The system will use local git commands to:
+  1. Fetch latest changes from remote
+  2. Checkout the default branch
+  3. Pull latest changes
+  4. Create and switch to the new branch
+
+**Priority:** The system automatically detects if the current working directory is a git repository. If it is, Local Git will be used. Otherwise, GitHub API will be used if credentials are available.
 
 ## Project Structure
 
@@ -222,10 +230,18 @@ npm start
 
 ### Branch Creation Fails
 
-1. Verify GitHub/GitLab token has correct permissions
+**For GitHub API:**
+1. Verify GitHub token has correct permissions
 2. Check repository format (should be `owner/repo` or full URL)
 3. Ensure default branch exists in the repository
 4. Check token hasn't expired
+
+**For Local Git:**
+1. Ensure you're running the command from a git repository directory
+2. Verify the directory contains a `.git` folder (repository is initialized or cloned)
+3. Check that you have write permissions to the repository directory
+4. Ensure git is installed and available in PATH
+5. If using remote, verify remote is configured correctly
 
 ### Issue Creation Fails
 

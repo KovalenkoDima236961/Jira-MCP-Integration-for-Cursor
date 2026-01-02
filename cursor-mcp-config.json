@@ -6,10 +6,7 @@
       "env": {
         "JIRA_CLOUD_ID": "98e8fc6d-f50f-44dc-a497-0f45939d8289",
         "GITHUB_TOKEN": "${GITHUB_TOKEN}",
-        "GITHUB_REPO": "${GITLAB_REPO}",
-        "GITLAB_TOKEN": "${GITLAB_TOKEN}",
-        "GITLAB_REPO": "${GITLAB_REPO}",
-        "CURSOR_ENABLED": "true"
+        "GITHUB_REPO": "${GITHUB_REPO}"
       }
     }
   }

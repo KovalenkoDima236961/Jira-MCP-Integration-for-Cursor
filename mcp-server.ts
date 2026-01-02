@@ -14,13 +14,17 @@ import {
   ListToolsResultSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import https from "node:https";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+const execAsync = promisify(exec);
 
 type JsonObject = Record<string, unknown>;
 
-// Connection to remote Atlassian MCP server
 const REMOTE_MCP = "https://mcp.atlassian.com/v1/mcp";
 
-// Create client for connecting to Atlassian MCP
 let jiraClient: Client | null = null;
 let jiraTransport: StdioClientTransport | null = null;
 
@@ -45,38 +49,9 @@ async function callJiraTool(name: string, args: JsonObject): Promise<unknown> {
   return result;
 }
 
-// Transliteration of Ukrainian and other characters to English
-function transliterateToEnglish(text: string): string {
-  const transliterationMap: Record<string, string> = {
-    // Ukrainian characters
-    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'h', 'ґ': 'g', 'д': 'd', 'е': 'e', 'є': 'ie',
-    'ж': 'zh', 'з': 'z', 'и': 'y', 'і': 'i', 'ї': 'i', 'й': 'i', 'к': 'k', 'л': 'l',
-    'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
-    'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ь': '',
-    'ю': 'iu', 'я': 'ia',
-    // Uppercase letters
-    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'H', 'Ґ': 'G', 'Д': 'D', 'Е': 'E', 'Є': 'IE',
-    'Ж': 'ZH', 'З': 'Z', 'И': 'Y', 'І': 'I', 'Ї': 'I', 'Й': 'I', 'К': 'K', 'Л': 'L',
-    'М': 'M', 'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
-    'Ф': 'F', 'Х': 'KH', 'Ц': 'TS', 'Ч': 'CH', 'Ш': 'SH', 'Щ': 'SHCH', 'Ь': '',
-    'Ю': 'IU', 'Я': 'IA',
-    // Russian characters
-    'ы': 'y', 'э': 'e', 'ъ': '', 'ё': 'e',
-    'Ы': 'Y', 'Э': 'E', 'Ъ': '', 'Ё': 'E',
-  };
-  
-  return text
-    .split('')
-    .map(char => transliterationMap[char] || char)
-    .join('');
-}
-
 function sanitizeBranchName(name: string): string {
-  // First transliterate to English
-  const transliterated = transliterateToEnglish(name);
-  
-  // Then clean and format
-  return transliterated
+  // Clean and format branch name
+  return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -132,19 +107,16 @@ function parseGitHubRepo(repo: string): { owner: string; repoName: string } | nu
   
   let repoPath = repo.trim();
   
-  // If it's a URL, extract the path
   if (repoPath.startsWith("http://") || repoPath.startsWith("https://")) {
     try {
       const url = new URL(repoPath);
       repoPath = url.pathname;
-      // Remove leading slash and .git if present
       repoPath = repoPath.replace(/^\/|\/$|\.git$/g, "");
     } catch {
       return null;
     }
   }
   
-  // Remove .git if present
   repoPath = repoPath.replace(/\.git$/, "");
   
   // Split into owner and repo
@@ -207,61 +179,79 @@ async function createGitHubBranch(issueKey: string, customBranchName?: string): 
   }
 }
 
-function parseGitLabRepo(repo: string): string {
-  // GitLab accepts "owner/repo", project ID, or full path
-  // If it's a URL, extract the path
-  if (repo.startsWith("http://") || repo.startsWith("https://")) {
-    try {
-      const url = new URL(repo);
-      const path = url.pathname.replace(/^\/|\/$|\.git$/g, "");
-      return path;
-    } catch {
-      return repo;
-    }
+async function branchExists(branchName: string, repoPath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execAsync(`git branch --list ${branchName}`, { cwd: repoPath });
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
   }
-  return repo.replace(/\.git$/, "");
 }
 
 async function createGitLabBranch(issueKey: string, customBranchName?: string): Promise<void> {
-  const gitlabToken = process.env.GITLAB_TOKEN;
-  const gitlabRepo = process.env.GITLAB_REPO;
-  const gitlabUrl = process.env.GITLAB_URL || "https://gitlab.com";
+  const localRepoPath = process.cwd();
 
-  if (!gitlabToken || !gitlabRepo) {
+  if (!existsSync(localRepoPath)) {
+    return;
+  }
+
+  const gitDir = join(localRepoPath, ".git");
+  if (!existsSync(gitDir)) {
     return;
   }
 
   try {
-    // Parse repo (supports URL and owner/repo or project-id format)
-    const repoPath = parseGitLabRepo(gitlabRepo);
-    
     let branchName: string;
     if (customBranchName && customBranchName.trim()) {
       branchName = sanitizeBranchName(customBranchName.trim());
     } else {
       branchName = issueKey.toLowerCase();
     }
-    
-    const defaultBranch = process.env.GITLAB_DEFAULT_BRANCH || "main";
-    const baseUrl = gitlabUrl.replace(/\/$/, "");
-    const encodedRepo = encodeURIComponent(repoPath);
 
-    const options: https.RequestOptions = {
-      hostname: baseUrl.replace(/^https?:\/\//, "").split("/")[0],
-      path: `/api/v4/projects/${encodedRepo}/repository/branches`,
-      method: "POST",
-      headers: {
-        "PRIVATE-TOKEN": gitlabToken,
-        "Content-Type": "application/json",
-      },
-    };
+    const defaultBranch = process.env.GITLAB_DEFAULT_BRANCH || process.env.GITHUB_DEFAULT_BRANCH || "master";
 
-    const data = JSON.stringify({
-      branch: branchName,
-      ref: defaultBranch,
-    });
+    try {
+      try {
+        await execAsync("git fetch origin", { cwd: localRepoPath });
+      } catch {
+        // Silently ignore if fetch fails
+      }
 
-    await httpsRequest(options, data);
+      try {
+        await execAsync(`git checkout ${defaultBranch}`, { cwd: localRepoPath });
+      } catch {
+        try {
+          await execAsync(`git checkout -b ${defaultBranch}`, { cwd: localRepoPath });
+        } catch {
+          // Silently ignore if branch creation fails
+        }
+      }
+
+      try {
+        await execAsync(`git pull origin ${defaultBranch}`, { cwd: localRepoPath });
+      } catch {
+        // Silently ignore if pull fails
+      }
+
+      // Check if branch already exists
+      const exists = await branchExists(branchName, localRepoPath);
+      if (!exists) {
+        try {
+          await execAsync(`git checkout -b ${branchName}`, { cwd: localRepoPath });
+        } catch {
+          // Silently ignore if branch creation fails
+        }
+      } else {
+        // Branch exists, just checkout
+        try {
+          await execAsync(`git checkout ${branchName}`, { cwd: localRepoPath });
+        } catch {
+          // Silently ignore if checkout fails
+        }
+      }
+    } catch (error: unknown) {
+      // Silently handle errors
+    }
   } catch (error: unknown) {
     // Silently handle errors - don't log to Jira
   }
@@ -270,7 +260,6 @@ async function createGitLabBranch(issueKey: string, customBranchName?: string): 
 async function handleCreateResponse(res: unknown, branchNameInput?: string): Promise<string | null> {
   let issueKey: string | null = null;
   try {
-    // Handle different response formats
     let responseObj: any;
     
     if (typeof res === 'string') {
@@ -283,12 +272,10 @@ async function handleCreateResponse(res: unknown, branchNameInput?: string): Pro
       responseObj = res;
     }
     
-    // Check if it's an error
     if (responseObj?.isError || responseObj?.error) {
       return null;
     }
     
-    // Try different paths to get issueKey
     if (responseObj?.content && Array.isArray(responseObj.content)) {
       // If response is in MCP content format
       for (const item of responseObj.content) {
@@ -316,18 +303,18 @@ async function handleCreateResponse(res: unknown, branchNameInput?: string): Pro
                  null;
     }
     
-    // If we found issueKey, create branch
     if (issueKey) {
       const branchName = branchNameInput || undefined;
       const hasGitHub = !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO);
-      const hasGitLab = !!(process.env.GITLAB_TOKEN && process.env.GITLAB_REPO);
       
-      if (hasGitHub && hasGitLab) {
-        await createGitHubBranch(issueKey, branchName);
+      const currentDir = process.cwd();
+      const gitDir = join(currentDir, ".git");
+      const isGitRepo = existsSync(gitDir);
+      
+      if (isGitRepo) {
+        await createGitLabBranch(issueKey, branchName);
       } else if (hasGitHub) {
         await createGitHubBranch(issueKey, branchName);
-      } else if (hasGitLab) {
-        await createGitLabBranch(issueKey, branchName);
       }
     }
   } catch (error) {
@@ -368,7 +355,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     const customTools: Tool[] = [
       {
         name: "createJiraIssueWithBranch",
-        description: "Create a Jira issue and automatically create a GitHub/GitLab branch. Supports both dev (simple) and prod (full form) modes.",
+        description: "Create a Jira issue and automatically create a GitHub/GitLab branch.",
         inputSchema: {
           type: "object",
           properties: {
@@ -378,8 +365,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             summary: { type: "string", description: "Issue summary/title" },
             description: { type: "string", description: "Issue description (optional)" },
             branchName: { type: "string", description: "Custom branch name (optional, defaults to issue key)" },
-            mode: { type: "string", enum: ["dev", "prod"], description: "Creation mode: 'dev' for simple, 'prod' for full form" },
-            fields: { type: "object", description: "Additional Jira fields (for prod mode)" },
+            fields: { type: "object", description: "Additional Jira fields" },
           },
           required: ["cloudId", "projectKey", "issueTypeName", "summary"],
         },
@@ -409,6 +395,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["cloudId", "issueIdOrKey"],
         },
       },
+      {
+        name: "analyzeJiraIssue",
+        description: "Analyze a Jira issue. Automatically creates a branch if it doesn't exist, then performs analysis.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            cloudId: { type: "string", description: "Jira Cloud ID" },
+            issueIdOrKey: { type: "string", description: "Issue key (e.g., OPS-123)" },
+            branchName: { type: "string", description: "Custom branch name (optional, defaults to issue key)" },
+          },
+          required: ["cloudId", "issueIdOrKey"],
+        },
+      },
     ];
     
     return {
@@ -419,21 +418,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   }
 });
 
-// Handle call tool
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const toolName = request.params.name;
   const args = request.params.arguments || {};
   
   try {
-    // Handle custom tools
     if (toolName === "createJiraIssueWithBranch") {
-      // Validate required parameters
       const cloudId = (args.cloudId as string) || getCloudId();
       const projectKey = args.projectKey as string;
       const issueTypeName = args.issueTypeName as string;
       const summary = args.summary as string;
       
-      // Validate required parameters
       if (!projectKey || projectKey.trim() === "") {
         throw new Error("projectKey is required and cannot be empty");
       }
@@ -451,8 +446,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         : undefined;
       const fields: JsonObject = {};
       
-      // Add additional fields for prod mode (without summary and description)
-      if (args.mode === "prod" && args.fields && typeof args.fields === "object") {
+      if (args.fields && typeof args.fields === "object") {
         const additionalFields = args.fields as JsonObject;
         for (const [key, value] of Object.entries(additionalFields)) {
           // Skip summary and description, as they are passed separately
@@ -460,11 +454,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           // Preserve original types for complex fields
           if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-            fields[key] = value; // assignee, reporter, etc.
+            fields[key] = value;
           } else if (Array.isArray(value)) {
-            fields[key] = value; // arrays
+            fields[key] = value;
           } else {
-            fields[key] = value; // other fields
+            fields[key] = value;
           }
         }
       }
@@ -475,7 +469,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         cloudId: String(cloudId).trim(),
         projectKey: String(projectKey).trim(),
         issueTypeName: String(issueTypeName).trim(),
-        summary: summaryValue, // summary as separate parameter
+        summary: summaryValue,
       };
       
       // Add description as separate parameter if present
@@ -490,7 +484,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
       const res = await callJiraTool("createJiraIssue", createArgs);
       
-      // Handle response and create branch
       const issueKey = await handleCreateResponse(res, args.branchName as string | undefined);
       
       return {
@@ -548,7 +541,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (toolName === "transitionJiraIssueToReview") {
       const cloudId = (args.cloudId as string) || getCloudId();
       
-      // First get available transitions
       const transitionsRes = await callJiraTool("getTransitionsForJiraIssue", {
         cloudId,
         issueIdOrKey: args.issueIdOrKey as string,
@@ -584,7 +576,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
     
-    // Proxy all other calls to Atlassian MCP
+    if (toolName === "analyzeJiraIssue") {
+      const cloudId = (args.cloudId as string) || getCloudId();
+      const issueIdOrKey = args.issueIdOrKey as string;
+      
+      if (!issueIdOrKey || issueIdOrKey.trim() === "") {
+        throw new Error("issueIdOrKey is required and cannot be empty");
+      }
+      
+      const issueRes = await callJiraTool("getJiraIssue", {
+        cloudId,
+        issueIdOrKey: issueIdOrKey.trim(),
+      });
+      
+      const branchName = args.branchName as string | undefined;
+      await createGitLabBranch(issueIdOrKey.trim(), branchName);
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Branch created/checked out for issue ${issueIdOrKey}. Ready for analysis.`,
+              issueKey: issueIdOrKey.trim(),
+              issue: issueRes,
+            }, null, 2),
+          },
+        ],
+      };
+    }
+    
     const client = await getJiraClient();
     const result = await client.request(
       { method: "tools/call", params: { name: toolName, arguments: args } },
@@ -596,7 +618,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// Start server
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
