@@ -58,7 +58,7 @@ Create a `.env` file in the project root with the following variables:
 
 ### Example `.env` file:
 ```env
-JIRA_CLOUD_ID=98e8fc6d-f50f-44dc-a497-0f45939d8289
+JIRA_CLOUD_ID=
 GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 GITHUB_REPO=owner/repository-name
 GITHUB_DEFAULT_BRANCH=main
