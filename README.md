@@ -226,6 +226,8 @@ poc-work-mcp-jira/
 ├── index.ts             # CLI interface
 ├── mcp-server.ts        # MCP server implementation
 ├── cursor-mcp-config.json  # Example Cursor configuration
+├── Dockerfile           # Docker build configuration
+├── .dockerignore        # Docker ignore patterns
 ├── package.json         # Dependencies and scripts
 └── README.md           # This file
 ```
@@ -246,6 +248,41 @@ npm run mcp-server
 ```bash
 npm start
 ```
+
+### Build with Docker
+
+You can compile the project using Docker:
+
+**Build the Docker image:**
+```bash
+docker build -t jira-mcp-poc .
+```
+
+**Build and copy compiled files to local directory:**
+```bash
+# Build the image
+docker build -t jira-mcp-poc .
+
+# Copy the compiled dist/ folder from the container
+docker create --name temp-container jira-mcp-poc
+docker cp temp-container:/app/dist ./dist
+docker rm temp-container
+```
+
+**Or build only (compile without creating runtime image):**
+```bash
+# Build stage only - compiles TypeScript
+docker build --target builder -t jira-mcp-poc:builder .
+
+# Copy compiled files
+docker create --name temp-container jira-mcp-poc:builder
+docker cp temp-container:/app/dist ./dist
+docker rm temp-container
+```
+
+The Dockerfile uses a multi-stage build:
+- **Builder stage**: Installs all dependencies (including dev dependencies) and compiles TypeScript
+- **Final stage**: Creates a production-ready image with only runtime dependencies
 
 ## Jira Data Center Setup
 
