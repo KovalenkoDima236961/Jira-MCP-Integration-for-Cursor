@@ -49,8 +49,8 @@ Create a `.env` file in the project root with the following variables:
 
 **For Jira Data Center (on-premise):**
 - `JIRA_BASE_URL` - Your Jira instance URL (e.g., `https://jira.service.snpgroup.com`)
-- `JIRA_API_TOKEN` or `JIRA_PERSONAL_ACCESS_TOKEN` - Personal Access Token for authentication
-- `JIRA_USERNAME` or `JIRA_EMAIL` - Your Jira username or email (required for Basic Auth)
+- `JIRA_PERSONAL_ACCESS_TOKEN` - Personal Access Token for authentication (recommended, uses Bearer auth)
+- OR `JIRA_API_TOKEN` + `JIRA_USERNAME`/`JIRA_EMAIL` - Legacy API Token with username/email (uses Basic Auth)
 
 #### Optional - GitHub Integration
 - `GITHUB_TOKEN` - GitHub personal access token with `repo` scope
@@ -73,10 +73,19 @@ GITHUB_REPO=owner/repository-name
 GITHUB_DEFAULT_BRANCH=main
 ```
 
-**For Jira Data Center:**
+**For Jira Data Center (with Personal Access Token - recommended):**
 ```env
 JIRA_BASE_URL=https://jira.service.snpgroup.com
-JIRA_API_TOKEN=your-personal-access-token
+JIRA_PERSONAL_ACCESS_TOKEN=your-personal-access-token
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+GITHUB_REPO=owner/repository-name
+GITHUB_DEFAULT_BRANCH=main
+```
+
+**For Jira Data Center (with Legacy API Token):**
+```env
+JIRA_BASE_URL=https://jira.service.snpgroup.com
+JIRA_API_TOKEN=your-api-token
 JIRA_USERNAME=your-email@example.com
 GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 GITHUB_REPO=owner/repository-name
@@ -110,9 +119,10 @@ GITHUB_DEFAULT_BRANCH=main
 ```
 
 **Note:** 
-- Use `JIRA_CLOUD_ID` for Jira Cloud, or `JIRA_BASE_URL` + `JIRA_API_TOKEN` + `JIRA_USERNAME` for Jira Data Center
+- Use `JIRA_CLOUD_ID` for Jira Cloud, or `JIRA_BASE_URL` + `JIRA_PERSONAL_ACCESS_TOKEN` (recommended) or `JIRA_BASE_URL` + `JIRA_API_TOKEN` + `JIRA_USERNAME` (legacy) for Jira Data Center
 - `MCP_SERVER_PATH` should point to the absolute path of `dist/mcp-server.js` (e.g., `/absolute/path/to/poc-work-mcp-jira/dist/mcp-server.js`)
 - All values use environment variables for security and flexibility
+- For Personal Access Token, only `JIRA_PERSONAL_ACCESS_TOKEN` is needed (no username/email required)
 
 2. Restart Cursor to load the MCP server
 
@@ -176,35 +186,64 @@ Creates a Jira issue and automatically creates a GitHub/GitLab branch. Works wit
 
 ### `assignJiraIssueWithAnalysis`
 
-Assigns a Jira issue to a user and optionally triggers Cursor analysis.
+Assigns a Jira issue to a user and optionally triggers Cursor analysis. Works with both **Jira Cloud** and **Jira Data Center**.
 
 **Parameters:**
-- `cloudId` (string, required) - Jira Cloud ID
+- `cloudId` (string, optional) - Jira Cloud ID (only needed for Cloud, will use `JIRA_CLOUD_ID` env var if not provided). For Data Center, set `JIRA_BASE_URL` env var instead.
 - `issueIdOrKey` (string, required) - Issue key (e.g., "OPS-123")
 - `assignee` (string, required) - Assignee email, accountId, or "unassign"
 
 ### `transitionJiraIssueToReview`
 
-Transitions a Jira issue to "In Review" status.
+Transitions a Jira issue to "In Review" status. Works with both **Jira Cloud** and **Jira Data Center**.
 
 **Parameters:**
-- `cloudId` (string, required) - Jira Cloud ID
+- `cloudId` (string, optional) - Jira Cloud ID (only needed for Cloud, will use `JIRA_CLOUD_ID` env var if not provided). For Data Center, set `JIRA_BASE_URL` env var instead.
 - `issueIdOrKey` (string, required) - Issue key (e.g., "OPS-123")
 
 ### `analyzeJiraIssue`
 
-Analyzes a Jira issue. Automatically creates a branch if it doesn't exist, then prepares the issue for analysis.
+Analyzes a Jira issue. Automatically creates a branch if it doesn't exist, then prepares the issue for analysis. Works with both **Jira Cloud** and **Jira Data Center**.
 
 **Parameters:**
-- `cloudId` (string, required) - Jira Cloud ID
+- `cloudId` (string, optional) - Jira Cloud ID (only needed for Cloud, will use `JIRA_CLOUD_ID` env var if not provided). For Data Center, set `JIRA_BASE_URL` env var instead.
 - `issueIdOrKey` (string, required) - Issue key (e.g., "OPS-123")
 - `branchName` (string, optional) - Custom branch name (optional, defaults to issue key)
 
 **Example:**
 ```json
 {
-  "cloudId": "98e8fc6d-f50f-44dc-a497-0f45939d8289",
   "issueIdOrKey": "OPS-123"
+}
+```
+
+**Note:** For Data Center, `cloudId` is not needed if environment variables are properly configured.
+
+### Standard Tools
+
+The following standard Jira tools are also available (automatically detected based on your Jira type):
+
+- `getJiraIssue` - Get a Jira issue by issue id or key
+- `createJiraIssue` - Create a Jira issue (without branch creation)
+- `editJiraIssue` - Edit a Jira issue. Use `fields` to update issue fields, and `update` to add comments, worklogs, etc.
+- `getTransitionsForJiraIssue` - Get available transitions for a Jira issue
+- `transitionJiraIssue` - Transition a Jira issue to a different status
+- `getVisibleJiraProjects` - Get list of visible Jira projects
+- `addCommentToJiraIssue` - Add a comment to a Jira issue
+
+**Example - Adding a comment via editJiraIssue:**
+```json
+{
+  "issueIdOrKey": "OPS-123",
+  "update": {
+    "comment": [
+      {
+        "add": {
+          "body": "This is a comment"
+        }
+      }
+    ]
+  }
 }
 ```
 
@@ -305,9 +344,17 @@ For Jira Data Center (on-premise), you need to:
    - Copy the token
 
 2. **Configure environment variables:**
+
+   **For Personal Access Token (recommended):**
    ```env
    JIRA_BASE_URL=https://your-jira-instance.com
-   JIRA_API_TOKEN=your-personal-access-token
+   JIRA_PERSONAL_ACCESS_TOKEN=your-personal-access-token
+   ```
+   
+   **For Legacy API Token:**
+   ```env
+   JIRA_BASE_URL=https://your-jira-instance.com
+   JIRA_API_TOKEN=your-api-token
    JIRA_USERNAME=your-email@example.com
    ```
 
@@ -327,9 +374,10 @@ For Jira Data Center (on-premise), you need to:
 
 **For Jira Data Center:**
 1. Verify your `JIRA_BASE_URL` is correct (should be the base URL without `/rest/api`)
-2. Check that `JIRA_API_TOKEN` and `JIRA_USERNAME` are set correctly
-3. Ensure your Personal Access Token has the necessary permissions
-4. Test the connection by accessing `https://your-jira-instance.com/rest/api/2/serverInfo` with your credentials
+2. For Personal Access Token: Check that `JIRA_PERSONAL_ACCESS_TOKEN` is set correctly (username/email not required)
+3. For Legacy API Token: Check that `JIRA_API_TOKEN` and `JIRA_USERNAME`/`JIRA_EMAIL` are set correctly
+4. Ensure your Personal Access Token or API Token has the necessary permissions
+5. Test the connection by accessing `https://your-jira-instance.com/rest/api/2/serverInfo` with your credentials
 
 ### Branch Creation Fails
 
