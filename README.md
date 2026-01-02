@@ -94,16 +94,25 @@ GITHUB_DEFAULT_BRANCH=main
   "mcpServers": {
     "jira-mcp-poc": {
       "command": "node",
-      "args": ["/absolute/path/to/poc-work-mcp-jira/dist/mcp-server.js"],
+      "args": ["${MCP_SERVER_PATH}"],
       "env": {
-        "JIRA_CLOUD_ID": "your-cloud-id",
+        "JIRA_CLOUD_ID": "${JIRA_CLOUD_ID}",
+        "JIRA_BASE_URL": "${JIRA_BASE_URL}",
+        "JIRA_API_TOKEN": "${JIRA_API_TOKEN}",
+        "JIRA_USERNAME": "${JIRA_USERNAME}",
         "GITHUB_TOKEN": "${GITHUB_TOKEN}",
-        "GITHUB_REPO": "${GITHUB_REPO}"
+        "GITHUB_REPO": "${GITHUB_REPO}",
+        "GITHUB_DEFAULT_BRANCH": "${GITHUB_DEFAULT_BRANCH}"
       }
     }
   }
 }
 ```
+
+**Note:** 
+- Use `JIRA_CLOUD_ID` for Jira Cloud, or `JIRA_BASE_URL` + `JIRA_API_TOKEN` + `JIRA_USERNAME` for Jira Data Center
+- `MCP_SERVER_PATH` should point to the absolute path of `dist/mcp-server.js` (e.g., `/absolute/path/to/poc-work-mcp-jira/dist/mcp-server.js`)
+- All values use environment variables for security and flexibility
 
 2. Restart Cursor to load the MCP server
 
