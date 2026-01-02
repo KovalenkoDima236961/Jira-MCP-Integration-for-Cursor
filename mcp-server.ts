@@ -112,9 +112,19 @@ async function callJiraDataCenterTool(name: string, args: JsonObject): Promise<u
     }
     
     case "editJiraIssue": {
-      const result = await callJiraDataCenterAPI(`issue/${args.issueIdOrKey}`, "PUT", {
-        fields: args.fields as JsonObject || {},
-      });
+      const body: JsonObject = {};
+      
+      // Fields can be updated
+      if (args.fields && typeof args.fields === "object") {
+        body.fields = args.fields as JsonObject;
+      }
+      
+      // Update field is for adding comments, worklogs, etc.
+      if (args.update && typeof args.update === "object") {
+        body.update = args.update as JsonObject;
+      }
+      
+      const result = await callJiraDataCenterAPI(`issue/${args.issueIdOrKey}`, "PUT", body);
       return {
         content: [
           {
@@ -244,11 +254,18 @@ async function callJiraDataCenterAPI(endpoint: string, method: string = "GET", b
   const token = process.env.JIRA_API_TOKEN || process.env.JIRA_PERSONAL_ACCESS_TOKEN;
   const username = process.env.JIRA_USERNAME || process.env.JIRA_EMAIL;
   
-  if (!baseUrl) {
+  if (!baseUrl || baseUrl.trim() === "") {
     throw new Error("JIRA_BASE_URL is required for Data Center");
   }
-  if (!token) {
-    throw new Error("JIRA_API_TOKEN or JIRA_PERSONAL_ACCESS_TOKEN is required for Data Center");
+  if (!token || token.trim() === "") {
+    throw new Error("JIRA_API_TOKEN or JIRA_PERSONAL_ACCESS_TOKEN is required for Data Center. Please set one of these environment variables with your API token.");
+  }
+  
+  // For Personal Access Token, username is not required (uses Bearer auth)
+  // For API Token (legacy), username is required (uses Basic auth)
+  const isPersonalAccessToken = process.env.JIRA_PERSONAL_ACCESS_TOKEN && !process.env.JIRA_API_TOKEN;
+  if (!isPersonalAccessToken && (!username || username.trim() === "")) {
+    throw new Error("JIRA_USERNAME or JIRA_EMAIL is required for Data Center authentication when using API Token. For Personal Access Token, only JIRA_PERSONAL_ACCESS_TOKEN is needed.");
   }
 
   const url = new URL(baseUrl);
@@ -257,16 +274,21 @@ async function callJiraDataCenterAPI(endpoint: string, method: string = "GET", b
     ? `${url.pathname.slice(0, -1)}${apiPath}` 
     : `${url.pathname}${apiPath}`;
 
-  // For Personal Access Token, use Basic Auth with email:token
-  // For API Token, use Basic Auth with username:token
+  // For Personal Access Token in Jira Data Center, use Bearer authentication
+  // For API Token (legacy), use Basic Auth with username:token
   let authHeader: string;
-  if (username) {
-    // Basic Auth: username:token
-    const credentials = Buffer.from(`${username}:${token}`).toString("base64");
-    authHeader = `Basic ${credentials}`;
+  if (process.env.JIRA_PERSONAL_ACCESS_TOKEN && token && !process.env.JIRA_API_TOKEN) {
+    // Personal Access Token: use Bearer authentication
+    authHeader = `Bearer ${token.trim()}`;
   } else {
-    // Try Bearer token (some Data Center versions support this)
-    authHeader = `Bearer ${token}`;
+    // Legacy API Token: use Basic Auth with username:token
+    const authUsername = process.env.JIRA_EMAIL || process.env.JIRA_USERNAME || username;
+    if (authUsername && token) {
+      const credentials = Buffer.from(`${authUsername.trim()}:${token.trim()}`).toString("base64");
+      authHeader = `Basic ${credentials}`;
+    } else {
+      throw new Error("Unable to determine authentication method. Please set JIRA_PERSONAL_ACCESS_TOKEN or JIRA_API_TOKEN with JIRA_USERNAME/JIRA_EMAIL.");
+    }
   }
 
   const options: https.RequestOptions = {
@@ -283,7 +305,19 @@ async function callJiraDataCenterAPI(endpoint: string, method: string = "GET", b
 
   const data = body ? JSON.stringify(body) : undefined;
   const response = await httpsRequest(options, data);
-  return JSON.parse(response);
+  
+  // Handle empty responses (e.g., 204 No Content for successful PUT/DELETE)
+  if (!response || response.trim() === "") {
+    return {};
+  }
+  
+  try {
+    return JSON.parse(response);
+  } catch (error) {
+    // If JSON parsing fails, return empty object for successful status codes
+    // (some endpoints return non-JSON responses)
+    return {};
+  }
 }
 
 async function getDefaultBranchSha(repo: string, branch: string, token: string): Promise<string> {
@@ -442,7 +476,6 @@ async function createGitLabBranch(issueKey: string, customBranchName?: string): 
         // Silently ignore if pull fails
       }
 
-      // Check if branch already exists
       const exists = await branchExists(branchName, localRepoPath);
       if (!exists) {
         try {
@@ -451,7 +484,6 @@ async function createGitLabBranch(issueKey: string, customBranchName?: string): 
           // Silently ignore if branch creation fails
         }
       } else {
-        // Branch exists, just checkout
         try {
           await execAsync(`git checkout ${branchName}`, { cwd: localRepoPath });
         } catch {
@@ -539,7 +571,6 @@ function getCloudId(): string {
   const jiraType = getJiraType();
   
   if (jiraType === "datacenter") {
-    // For Data Center, we don't use cloudId, return base URL instead
     const baseUrl = process.env.JIRA_BASE_URL;
     if (!baseUrl) {
       throw new Error("JIRA_BASE_URL is required for Data Center");
@@ -609,14 +640,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           {
             name: "editJiraIssue",
-            description: "Edit a Jira issue",
+            description: "Edit a Jira issue. Use 'fields' to update issue fields, and 'update' to add comments, worklogs, etc.",
             inputSchema: {
               type: "object",
               properties: {
                 issueIdOrKey: { type: "string" },
-                fields: { type: "object" },
+                fields: { type: "object", description: "Fields to update (e.g., assignee, priority)" },
+                update: { type: "object", description: "Update operations (e.g., comments, worklogs). Format: { comment: [{ add: { body: 'text' } }] }" },
               },
-              required: ["issueIdOrKey", "fields"],
+              required: ["issueIdOrKey"],
             },
           },
           {
@@ -651,11 +683,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     const customTools: Tool[] = [
       {
         name: "createJiraIssueWithBranch",
-        description: "Create a Jira issue and automatically create a GitHub/GitLab branch.",
+        description: "Create a Jira issue and automatically create a GitHub/GitLab branch. Works with both Jira Cloud and Data Center.",
         inputSchema: {
           type: "object",
           properties: {
-            cloudId: { type: "string", description: "Jira Cloud ID (for Cloud) or JIRA_BASE_URL (for Data Center)" },
+            cloudId: { type: "string", description: "Jira Cloud ID (optional, for Cloud only - will use JIRA_CLOUD_ID env var if not provided). For Data Center, set JIRA_BASE_URL env var instead." },
             projectKey: { type: "string", description: "Project key (e.g., OPS)" },
             issueTypeName: { type: "string", description: "Issue type (Task, Bug, Story, etc.)" },
             summary: { type: "string", description: "Issue summary/title" },
@@ -663,7 +695,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             branchName: { type: "string", description: "Custom branch name (optional, defaults to issue key)" },
             fields: { type: "object", description: "Additional Jira fields" },
           },
-          required: ["cloudId", "projectKey", "issueTypeName", "summary"],
+          required: ["projectKey", "issueTypeName", "summary"],
         },
       },
       {
@@ -745,7 +777,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (args.fields && typeof args.fields === "object") {
         const additionalFields = args.fields as JsonObject;
         for (const [key, value] of Object.entries(additionalFields)) {
-          // Skip summary and description, as they are passed separately
           if (key === "summary" || key === "description") continue;
           
           // Preserve original types for complex fields
@@ -760,22 +791,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       
       // Call createJiraIssue
-      // According to errors, createJiraIssue expects summary and description as separate parameters
+      // callJiraTool automatically determines Jira type (Cloud/Data Center) and routes accordingly
+      // For Data Center, cloudId is not needed. For Cloud, it's handled by the MCP client.
       const createArgs: JsonObject = {
-        cloudId: String(cloudId).trim(),
         projectKey: String(projectKey).trim(),
         issueTypeName: String(issueTypeName).trim(),
         summary: summaryValue,
       };
       
-      // Add description as separate parameter if present
       if (descriptionValue) {
         createArgs.description = descriptionValue;
       }
       
-      // Add fields only if there's something besides summary and description
       if (Object.keys(fields).length > 0) {
         createArgs.fields = fields;
+      }
+      
+      // Only add cloudId for Cloud MCP (it's ignored for Data Center)
+      const jiraType = getJiraType();
+      if (jiraType === "cloud") {
+        createArgs.cloudId = String(cloudId).trim();
       }
       
       const res = await callJiraTool("createJiraIssue", createArgs);
@@ -903,12 +938,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
     
-    const client = await getJiraClient();
-    const result = await client.request(
-      { method: "tools/call", params: { name: toolName, arguments: args } },
-      CallToolResultSchema
-    );
-    return result;
+    return await callJiraTool(toolName, args);
   } catch (error) {
     throw error;
   }

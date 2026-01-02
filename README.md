@@ -141,28 +141,38 @@ When connected to Cursor, the following custom tools are available:
 
 ### `createJiraIssueWithBranch`
 
-Creates a Jira issue and automatically creates a GitHub/GitLab branch.
+Creates a Jira issue and automatically creates a GitHub/GitLab branch. Works with both **Jira Cloud** and **Jira Data Center**.
 
 **Parameters:**
-- `cloudId` (string, required) - Jira Cloud ID
+- `cloudId` (string, optional) - Jira Cloud ID (only needed for Cloud, will use `JIRA_CLOUD_ID` env var if not provided). For Data Center, set `JIRA_BASE_URL` env var instead.
 - `projectKey` (string, required) - Project key (e.g., "OPS")
 - `issueTypeName` (string, required) - Issue type (Task, Bug, Story, etc.)
 - `summary` (string, required) - Issue summary/title
 - `description` (string, optional) - Issue description
 - `branchName` (string, optional) - Custom branch name (defaults to issue key)
-- `mode` (string, optional) - "dev" for simple mode, "prod" for full form
-- `fields` (object, optional) - Additional Jira fields (for prod mode)
+- `fields` (object, optional) - Additional Jira fields
 
-**Example:**
+**Example for Jira Cloud:**
 ```json
 {
-  "cloudId": "98e8fc6d-f50f-44dc-a497-0f45939d8289",
   "projectKey": "OPS",
   "issueTypeName": "Task",
   "summary": "Fix login bug",
   "description": "The login form is not working properly"
 }
 ```
+
+**Example for Jira Data Center:**
+```json
+{
+  "projectKey": "OPS",
+  "issueTypeName": "Task",
+  "summary": "Fix login bug",
+  "description": "The login form is not working properly"
+}
+```
+
+**Note:** The system automatically detects whether you're using Cloud or Data Center based on environment variables (`JIRA_CLOUD_ID` for Cloud, `JIRA_BASE_URL` for Data Center). You don't need to specify `cloudId` in the request if environment variables are properly configured.
 
 ### `assignJiraIssueWithAnalysis`
 
